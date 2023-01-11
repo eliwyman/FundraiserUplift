@@ -1,0 +1,331 @@
+---
+title: "Fundraising"
+author: "Elliot Wyman - 11317748"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+setwd("C:/Users/ellio/local projects/HEC/60603 - Statistical Learning/project")
+```
+
+The data is split between different files:
+
+* MembersList.csv: Contains basic information about the members of the foundation as of 2019. Each member is identified with a unique ID.
+* DonationHistory.csv: Is a list of all donations that were made up to 2020. Note that there is a maximum of one donation per year per person.
+* ListContacted2020.csv: You have convinced the foundation to do a pilot study in 2020. The list of IDs in this file were randomly select, then called in 2020. Their donations in 2020 will reflect the fact that they were called.
+* NewsLetterRead.csv: Using their mass mailing software, the foundation was able to track who opened the email newsletter in 2019 – we chose 2019 to make sure the phone calls did not have an effect on the newsletter. The information is provided month by month. All members are registered to the Newsletter, but not all read it (of course).
+* SocialNetworkUsage.csv: The foundation has obtained information about users of their social media page for 2019. Not all members visit that page, and non-members are welcome too. Of course, the social media platform does not have the members IDs, but they have their names.
+* Sample-Big5Questionnaire.csv: Some members agreed to fill a personality test based on 15 questions that can be used to assess their profile. You may also try to exploit that information. The variable names are adjectives, and the questions were: On a scale from 1 = “not at all” to 10 = “absolutely”, do you consider yourself (insert the adjective here). 
+
+The first 60,000 calls are only \$5 per call, but additional calls beyond 60,000 require renting space, hiring people, and training them. Their cost is evaluated to 25\$ per call.
+
+*Your role is to decide who should be called to maximize the donations received. People do not need to be called to give – your call may encourage or discourage them, depending on their personality.*
+
+Fundraising project: a csv file called Result_collection.csv which contains 2 columns. The first column called ID contains the IDs of the MembersList.csv file. The second column called CALL contains the value 1 if the client should be called and 0 otherwise
+
+#### Data Exploration
+
+```{r}
+MembersList<-read.csv("Data/MembersList.csv")
+
+head(MembersList)
+```
+
+```{r}
+summary(MembersList)
+```
+
+```{r}
+DonationHistory<-read.csv("Data/DonationHistory.csv")
+
+head(DonationHistory)
+```
+```{r}
+summary(DonationHistory)
+```
+
+```{r}
+ListContacted2020<-read.csv("Data/ListContacted2020.csv", header = FALSE)
+
+head(ListContacted2020)
+```
+
+```{r}
+NewsLetterRead<-read.csv("Data/NewsLetterRead.csv")
+
+head(NewsLetterRead)
+```
+```{r}
+summary(NewsLetterRead)
+```
+```{r}
+library(ggplot2)
+
+months <- month.abb[c(1:12)]
+months = factor(months, levels = month.abb)
+
+monthly_reads <- colSums(NewsLetterRead[,-1])
+
+df <- data.frame(x = monthly_reads, counts = months)
+
+ggplot(df) + geom_bar(aes(x = months, y = monthly_reads), stat="identity")
+
+```
+```{r}
+SocialNetworkUsage<-read.csv("Data/SocialNetworkUsage.csv")
+
+head(SocialNetworkUsage)
+```
+
+```{r}
+summary(SocialNetworkUsage)
+```
+
+```{r}
+Big5Questionnaire<-read.csv("Data/Sample-Big5Questionnaire.csv")
+
+head(Big5Questionnaire)
+```
+```{r}
+summary(Big5Questionnaire)
+```
+
+#### Data cleaning
+
+```{r}
+# ListContacted2020 shouldn't contain IDs that don't appear in MembersList
+# returns all values in ListContacted2020 that are NOT in MembersList$
+ListContacted2020$V1[!ListContacted2020$V1 %in% MembersList$ID]
+
+# MembersList shouldn't have any NA values for ID in our members list
+subset(MembersList, is.na(ID))
+
+# DonationHistory only records donations, and should not have any na values
+subset(DonationHistory, !complete.cases(DonationHistory))
+
+# NewsLetterRead only records reads, and should not have any na values
+subset(NewsLetterRead, !complete.cases(NewsLetterRead))
+
+# SocialNetworkUsage also likely won't contain incomplete records
+subset(SocialNetworkUsage, !complete.cases(SocialNetworkUsage))
+# remove non-unique (by name) social media accounts
+
+
+# Big5Questionnaire should contain only filled questionaries and should not contain na values
+subset(Big5Questionnaire, !complete.cases(Big5Questionnaire))
+
+```
+
+
+#### Data preprocesing
+
+1. Pre-process tables for merging with ListContacted2020 
+
+```{r}
+# In the MembersList table, we should create a column Name, concatenating FirstName and LastName to be used as key when merging with table SocialNetworkUsage
+library(stringr)
+MembersList$Name <- paste(str_trim(tolower(MembersList$FirstName)), str_trim(tolower(MembersList$LastName)), sep=" ")
+
+# Create read_rate for NewsLetter (sum of rows / count)
+NewsLetterRead$read_rate <- rowSums(NewsLetterRead[2:ncol(NewsLetterRead)]) / length(NewsLetterRead[2:ncol(NewsLetterRead)])
+
+# SocialNetworkUsage appears to contain the names in 4 formats:
+#		<firstInitial> <lastInitial> e.g. C K
+#		<firstInitial> <lastName> e.g. C Klein
+#		<first name> <lastInitial> e.g. Calvin K
+#		<first name> <lastName> e.g. Calvin Klein
+# 	"The" <lastname>s
+SocialNetworkUsage$Name <- tolower(SocialNetworkUsage$Name)
+
+# make all merge keys lowercase
+MembersList$email <- tolower(MembersList$email)
+NewsLetterRead$email <- tolower(NewsLetterRead$email)
+
+```
+
+##### Dimension reduction on questionnaire
+
+```{r}
+# drop the ID (1st column) from the data structure 
+Big5.pca <- Big5Questionnaire[,-1]
+
+# check unprocessed dimensions
+dim(Big5.pca)
+```
+
+
+```{r}
+summary(diag(var(Big5.pca)))
+
+Big5.pca = data.frame(apply(Big5.pca, 2, scale))
+```
+
+```{r}
+# PCA Analysis
+Big5.result.pca = prcomp(Big5.pca, center=TRUE, scale.=TRUE)
+
+plot(summary(Big5.result.pca)$importance[3,])
+```
+
+The graph shows us that 5 PCs get us nearly 100% of the explainability of all 15 variables.
+
+```{r}
+pca_chosen <- c(1:5)
+
+head(Big5.result.pca$x[, pca_chosen])
+```
+
+We can only take unique names from social media as there is no other identifier and we could be mistakenly merging data.
+
+```{r}
+length(unique(SocialNetworkUsage$Name))
+```
+Drop all non-unique, by Name.
+
+```{r}
+SocialNetworkUsage <- SocialNetworkUsage[!duplicated(SocialNetworkUsage$Name), ]
+
+nrow(SocialNetworkUsage)
+```
+
+```{r}
+# identify the efficacy of a merge using Name in lower case
+nrow(merge(SocialNetworkUsage, MembersList, by = 'Name', all.x = TRUE))
+```
+The above is suspicous, perhaps MembersList has duplicate names?
+
+```{r}
+length(unique(MembersList$Name))
+```
+```{r}
+# create a new data frame writing each row of donation records as column with year
+# e.g.
+# ID | <Yr 2009>-Amount | <Yr 2010>-Amount | ...
+
+DonationHistoryYears <- data.frame (ID = unique(DonationHistory$ID))
+
+for(year in sort(unique(DonationHistory$Yr)))
+{
+	temp <- DonationHistory[DonationHistory$Yr == year, ]
+	
+	# drop Yr column, it's static now and we dont want it for merge
+	temp <- subset(temp, select = -c(Yr))
+	
+	names(temp)[names(temp) == "Amount"] <- paste(toString(year), "- Amount")
+	
+	column_string = paste(toString(year), "- Amount")
+	
+	# we dont want the year column, we know its value
+	DonationHistoryYears <- merge(DonationHistoryYears, temp, by = "ID", all.x = TRUE)
+}
+
+head(DonationHistoryYears)
+```
+
+##### Pre-Merge social media
+
+```{r}
+# merge (inner join) unique memberslist names, ID only with unique social media
+SocialNetworkUsage <- merge(SocialNetworkUsage, MembersList[!duplicated(MembersList$Name), c('ID', 'Name')], by = 'Name')
+```
+
+##### Perform a merge (left outer join) of MembersList and all other tables
+
+```{r}
+# add column of 1s to denote treatment, keeping ID ("V1") only
+member.covariates <- merge(cbind(ListContacted2020[c(1)], Treatment = 1), MembersList, by.x = "V1", by.y = "ID", all.y = TRUE)
+
+# rename V1 column to ID
+names(member.covariates)[names(member.covariates) == "V1"] <- "ID"
+
+member.covariates <- merge(member.covariates, NewsLetterRead, by = "email", all.x = TRUE)
+
+# merge the result of the PCA on Big5Questionnaire
+member.covariates <- merge(member.covariates, cbind(ID = Big5Questionnaire[,1], Big5.result.pca$x[, pca_chosen]), by = "ID", all.x = TRUE)
+
+member.covariates <- merge(member.covariates, DonationHistoryYears, by = "ID", all.x = TRUE)
+
+# merge Social Media
+member.covariates <- merge(member.covariates, SocialNetworkUsage, by = "ID", all.x = TRUE)
+
+head(member.covariates)
+```
+
+##### Post-merge processing - preparing data frames for models
+
+```{r}
+# replace NaNs in treatment column with 0s (indicating control group)
+member.covariates$Treatment[is.na(member.covariates$Treatment)] <- 0
+
+# replace numbers with names 2009 -> Nine
+names(member.covariates)[names(member.covariates) == "2009 - Amount"] <- "NineAmt"
+names(member.covariates)[names(member.covariates) == "2010 - Amount"] <- "TenAmt"
+names(member.covariates)[names(member.covariates) == "2011 - Amount"] <- "ElevenAmt"
+names(member.covariates)[names(member.covariates) == "2012 - Amount"] <- "TwelveAmt"
+names(member.covariates)[names(member.covariates) == "2013 - Amount"] <- "ThirteenAmt"
+names(member.covariates)[names(member.covariates) == "2014 - Amount"] <- "FourteenAmt"
+names(member.covariates)[names(member.covariates) == "2015 - Amount"] <- "FifteenAmt"
+names(member.covariates)[names(member.covariates) == "2016 - Amount"] <- "SixteenAmt"
+names(member.covariates)[names(member.covariates) == "2017 - Amount"] <- "SeventeenAmt"
+names(member.covariates)[names(member.covariates) == "2018 - Amount"] <- "EighteenAmt"
+names(member.covariates)[names(member.covariates) == "2019 - Amount"] <- "NineteenAmt"
+names(member.covariates)[names(member.covariates) == "2020 - Amount"] <- "TwentyAmt"
+
+member.covariates$donated[!is.na(member.covariates$TwentyAmt)] <- 1
+member.covariates$donated[is.na(member.covariates$TwentyAmt)] <- 0
+
+# replace NA values with 0 in all columns ending with 'Amt'
+member.covariates[grepl(glob2rx("*Amt$"), colnames(member.covariates))][is.na(member.covariates[grepl(glob2rx("*Amt$"), colnames(member.covariates))])] <- 0
+
+member.covariates$Woman <- as.factor(member.covariates$Woman)
+member.covariates$Education <- as.factor(member.covariates$Education)
+member.covariates$City <- as.factor(member.covariates$City)
+
+member.covariates$Jan  <- as.factor(member.covariates$Jan )
+member.covariates$Feb  <- as.factor(member.covariates$Feb )
+member.covariates$Mar  <- as.factor(member.covariates$Mar )
+member.covariates$Apr  <- as.factor(member.covariates$Apr )
+member.covariates$May  <- as.factor(member.covariates$May )
+member.covariates$Jun  <- as.factor(member.covariates$Jun )
+member.covariates$Jul  <- as.factor(member.covariates$Jul )
+member.covariates$Aug  <- as.factor(member.covariates$Aug )
+member.covariates$Sep  <- as.factor(member.covariates$Sep )
+member.covariates$Oct  <- as.factor(member.covariates$Oct )
+member.covariates$Nov  <- as.factor(member.covariates$Nov )
+member.covariates$Dec   <- as.factor(member.covariates$Dec  )
+
+member.covariates$PC1[is.na(member.covariates$PC1)] <- 0
+member.covariates$PC2[is.na(member.covariates$PC2)] <- 0
+member.covariates$PC3[is.na(member.covariates$PC3)] <- 0
+member.covariates$PC4[is.na(member.covariates$PC4)] <- 0
+member.covariates$PC5[is.na(member.covariates$PC5)] <- 0
+
+member.covariates$Shares[is.na(member.covariates$Shares)] <- 0
+member.covariates$Likes[is.na(member.covariates$Likes)] <- 0
+
+member.covariates$Supporter[is.na(member.covariates$Supporter)] <- FALSE
+member.covariates$Supporter <- as.factor(member.covariates$Supporter)
+
+member.covariates$donated <- as.factor(member.covariates$donated)
+
+str(member.covariates)
+```
+
+###### Drop all non-covariates
+```{r}
+member.covariates <- subset(member.covariates, select = -c(email, Name.x, Name.y, LastName, FirstName))
+```
+
+##### Export dataframes to CSV
+
+```{r}
+# write_csv() from the readr package is faster and never writes row names
+library(readr)
+
+#export dataframes to csv
+write_csv(member.covariates, file = "Data/member.covariates.csv")
+```
+

@@ -1,0 +1,161 @@
+---
+title: "Modeling"
+author: "Elliot Wyman - 11317748"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(testit)
+```
+
+#### Import Data
+
+```{r}
+#read dataframes from csv
+member.covariates <- read.csv("Data/member.covariates.csv")
+
+attach(member.covariates)
+
+head(member.covariates)
+```
+
+##### Models
+
+1. modeling the response variable (e.g., make a donation) separately for each of the 2 groups (treatment and control)
+
+###### split data
+
+```{r}
+tmp <- split(member.covariates, f = member.covariates$Treatment)
+
+member.covariates.ctrl <- tmp[[1]]
+
+member.covariates.treat <- tmp[[2]]
+
+assert("Control group size is 900,000", nrow(member.covariates.ctrl) == 900000)
+
+assert("Treatment group size is 100,000", nrow(member.covariates.treat) == 100000)
+```
+
+###### run logistic model predicting donation probability for control group (Pc)
+
+```{r}
+model_isdonate_control <- glm(donated ~ Treatment + Woman + Age + Salary + Education + City + Joined + read_rate + NineAmt + TenAmt + ElevenAmt + TwelveAmt + ThirteenAmt + FourteenAmt + FifteenAmt + SixteenAmt + SeventeenAmt + EighteenAmt + NineteenAmt + PC1 + PC2 + PC3 + PC4 + PC5 + Shares + Likes + Supporter, data=member.covariates.ctrl, family=binomial(link="logit"))
+
+summary(model_isdonate_control)
+```
+
+###### run logistic model predicting donation probability for treatment group (Pt)
+
+```{r}
+model_isdonate_treatment <- glm(donated ~ Treatment + Woman + Age + Salary + Education + City + Joined + read_rate + NineAmt + TenAmt + ElevenAmt + TwelveAmt + ThirteenAmt + FourteenAmt + FifteenAmt + SixteenAmt + SeventeenAmt + EighteenAmt + NineteenAmt + PC1 + PC2 + PC3 + PC4 + PC5 + Shares + Likes + Supporter, data=member.covariates.treat, family=binomial(link="logit"))
+
+summary(model_isdonate_treatment)
+```
+
+###### Calculate persuadable rate (Tau_c)
+
+```{r}
+prob_treat <- predict(model_isdonate_treatment, member.covariates)
+
+prob_ctrl <- predict(model_isdonate_control, member.covariates)
+
+tau_c = prob_treat - prob_ctrl
+```
+
+```{r}
+results <- data.frame(member.covariates$ID, tau_c)
+
+results$class[results$tau_c > 0] <- "Persuadable"
+results$class[results$tau_c == 0] <- "Sure thing"
+results$class[results$tau_c < 0] <- "Sleeping dog"
+
+members.pers_sure <- split(member.covariates, results$tau_c >= 0)[[2]]
+
+print(nrow(members.pers_sure))
+
+head(members.pers_sure)
+```
+
+2. predict, according to the characteristics of the individual, the average amount donation amount (using only those who have made a donation)
+
+###### split data
+
+```{r}
+members.donated <- split(member.covariates, member.covariates$donated)$`1`
+
+head(members.donated)
+```
+
+```{r}
+persuadable_threshold = 0
+
+member.covariates$tau_c <- tau_c
+
+members.predictions <- split(member.covariates, member.covariates$tau_c > persuadable_threshold)
+
+members.persuadables <- members.predictions[[2]]
+
+print(nrow(members.persuadables))
+
+head(members.persuadables)
+```
+
+###### run linear regression model predicting donation amount
+
+```{r}
+model_donationamt_donators <- lm(TwentyAmt ~ Woman + Age + Salary + Education + City + Joined + read_rate + NineAmt + TenAmt + ElevenAmt + TwelveAmt + ThirteenAmt + FourteenAmt + FifteenAmt + SixteenAmt + SeventeenAmt + EighteenAmt + NineteenAmt + PC1 + PC2 + PC3 + PC4 + PC5 + Shares + Likes + Supporter, data=members.donated)
+
+summary(model_donationamt_donators)
+```
+
+#### Results
+
+##### predict donations 
+
+```{r}
+members.persuadables$pred_donation <- predict(model_donationamt_donators, members.persuadables)
+
+members.pers_sure$pred_donation <- predict(model_donationamt_donators, members.pers_sure)
+```
+
+##### check if donators exist with estimated donation amount between $5 and $25
+
+```{r}
+sum(members.persuadables$pred_donation > 5) - sum(members.persuadables$pred_donation > 25) 
+```
+##### grab IDs of potential donators
+
+```{r}
+ids.dontcall <- subset(members.predictions[[1]], select=c(ID))
+
+ids.call <- subset(members.predictions[[2]], select=c(ID))
+
+results_collection <- rbind(data.frame(ids.dontcall, CALL = 0), data.frame(ids.call, CALL = 1))
+
+head(results_collection)
+```
+
+##### Calculate net donations and prepare results data frame (donations of classes "Persuadables and Sure things") 
+
+```{r}
+sum(members.pers_sure$pred_donation)
+
+results <- merge(results, members.pers_sure, by.x = "member.covariates.ID", by.y = "ID", all.x = TRUE)
+```
+
+
+```{r}
+# write_csv() from the readr package is faster and never writes row names
+library(readr)
+
+#export dataframes to csv
+write_csv(results_collection, file = "Data/Result_collection.csv")
+
+#export dataframes to csv
+write_csv(results, file = "Data/Results_summary.csv")
+```
+
